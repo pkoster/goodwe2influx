@@ -18,7 +18,7 @@ git clone https://github.com/pkoster/goodwe2influx.git
 ```commandline
 pip install -r requirements.txt
 ```
-GoodWe2Influx needs the following modulesS:
+GoodWe2Influx needs the following modules:
 - goodwe  
   GoodWe inverter client.
 - influxdb  
@@ -94,7 +94,8 @@ Copy the MAC-address.
 The ```-v``` argument prints more output.
 The ```--dryrun``` argument avoids database changes.
 ```commandline
-$ python goodwe2influx.py --invertermac 289C6E64xxxx --dryrun -v                      Inverter #0   IP-address: 192.168.1.89   MAC-address: 289C6E64278E   name: Solar-WiFi228R0056                                               
+$ python goodwe2influx.py --invertermac 289C6E64xxxx --dryrun -v                      
+Inverter #0   IP-address: 192.168.1.89   MAC-address: 289C6E64278E   name: Solar-WiFi228R0056                                               
 Configuration from commandline and mapping file: {
     "invertermac": "289C6E64xxxx",
     "inverterhost": null,
