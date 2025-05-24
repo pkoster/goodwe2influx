@@ -30,13 +30,15 @@ class Goodwe2Influx:
         self._mappings = mappings
         self._verbose = verbose
         self._dryrun = dryrun
-        self._inverteripreachable = None
+        self._inverterlastreachable = datetime.datetime.min
+        self._inverter = None
+
 
     def run(self) -> None:
         """
         Read from inverter and store in database in loop.
         """
-        while not self._update_inverter_ip_address():
+        while not self._scanconnect():
             print(f"No IP address known. Retry in {self._interval}s.", file=sys.stderr)
             time.sleep(self._interval)
         while True:
@@ -66,29 +68,43 @@ class Goodwe2Influx:
         :return: sensor and setting data
         :raises: RequestFailedException, InverterError
         """
-        async def get_inverter_data_async(host) -> dict:
-            inverter = await goodwe.connect(host)
+        async def get_inverter_data_async(inverter) -> dict:
             sensor_data = await inverter.read_runtime_data()
             settings_data = await inverter.read_settings_data()
             return sensor_data | settings_data
 
-        self._update_inverter_ip_address()
-        inverterdata = asyncio.run(get_inverter_data_async(self._inverterhostaddress))
-        self._update_inverter_ip_reacheable()
+        self._scanconnect()
+        inverterdata = asyncio.run(get_inverter_data_async(self._inverter))
+        self._update_inverter_last_reacheable()
         return inverterdata
 
 
-    def _update_inverter_ip_address(self) -> bool:
+    def _connect(self, reconnect: bool = False) -> None:
         """
-        Update IP address for inverter MAC address.
-        :returns: True if (old) host or IP address is known, False otherwise
+        Connect to inverter
         """
+        async def connect_async(host: str) -> goodwe.Inverter:
+            timeout = 5
+            return await goodwe.connect(host, timeout=timeout, retries=self._interval // timeout)
+
+        try:
+            if (not self._inverter or reconnect) and self._inverterhostaddress:
+                self._inverter = asyncio.run(connect_async(self._inverterhostaddress))
+                self._update_inverter_last_reacheable()
+        except goodwe.InverterError as e:
+            pass
+
+
+    def _scanconnect(self) -> bool:
+        """
+        Update IP address for inverter MAC address. (Re)connect to scanner.
+        :returns: True if at least connected once to inverter, False otherwise
+        """
+        self._connect()
         if not self._invertermacaddress:
-            return True
-        if (self._inverteripreachable and (
-                datetime.datetime.now() - self._inverteripreachable) < datetime.timedelta(minutes = 15)
-        ):
-            return True
+            return self._inverter is not None  # macadress is prerequisite for scan
+        if datetime.datetime.now() - self._inverterlastreachable < datetime.timedelta(minutes = 15):
+            return self._inverter is not None  # only scan when not reachable for more than 15 minutes
 
         if self._verbose:
             print(f"Scanning for inverters.", file=sys.stdout)
@@ -96,19 +112,21 @@ class Goodwe2Influx:
         for inverter in inverters:
             if not inverter['mac'] == self._invertermacaddress:
                 continue
-            if not self._inverterhostaddress == inverter['ip']:
+            ipchange = not self._inverterhostaddress == inverter['ip']
+            if ipchange:
                 print(f"Update inverter IP to {inverter['ip']}", file=sys.stdout)
             self._inverterhostaddress = inverter['ip']
-            self._update_inverter_ip_reacheable()
-            return True
-        return self._inverterhostaddress is not None
+            self._update_inverter_last_reacheable()
+            self._connect(reconnect = ipchange)
+            return self._inverter is not None
+        return self._inverter is not None
 
 
-    def _update_inverter_ip_reacheable(self) -> None:
+    def _update_inverter_last_reacheable(self) -> None:
         """
         Update last time inverter IP was reachable.
         """
-        self._inverteripreachable = datetime.datetime.now()
+        self._inverterlastreachable = datetime.datetime.now()
 
 
     def _format_influxpoint(self, inverterdata: dict) -> dict:
