@@ -9,6 +9,25 @@ import goodwe
 import influxdb
 
 
+def do_every(period: int,f,*args) -> None:
+    """
+    Execute function f periodically with period period seconds.
+    If execution of f exceeds period then next is executed without delay until back on schedule.
+    """
+    def g_tick():
+        """
+        Generate time to next scheduled tick with period period
+        """
+        t = time.time()
+        while True:
+            t += period
+            yield max(t - time.time(), 0)
+    g = g_tick()
+    while True:
+        time.sleep(next(g))
+        f(*args)
+
+
 class Goodwe2Influx:
     """
     Read GoodWe sensor and settings parameters and store in InfluxDB 1.x database.
@@ -40,10 +59,8 @@ class Goodwe2Influx:
         """
         while not self._scanconnect():
             print(f"No IP address known. Retry in {self._interval}s.", file=sys.stderr)
-            time.sleep(self._interval)
-        while True:
-            self._run()
-            time.sleep(self._interval)
+            time.sleep(5)
+        do_every(self._interval, self._run)
 
 
     def _run(self) -> None:
