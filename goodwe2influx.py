@@ -13,18 +13,14 @@ logger = logging.getLogger(__name__)
 
 
 def do_every(period: int,f,*args) -> None:
-    """
-    Execute function f periodically with period period seconds.
-    If execution of f exceeds period then next is executed without delay until back on schedule.
-    """
+    """Execute function periodically every period seconds."""
     def g_tick():
-        """
-        Generate time to next scheduled tick with period period
-        """
+        """Generate time to next periodic tick"""
+        yield 0
         t = time.time()
         while True:
             t += period
-            yield max(t - time.time(), 0)
+            yield max(t - time.time(), 0)  # No negative time. Catchup missed ticks.
     g = g_tick()
     while True:
         time.sleep(next(g))
