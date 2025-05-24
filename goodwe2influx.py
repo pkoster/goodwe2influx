@@ -2,11 +2,14 @@ import argparse
 import datetime
 import json
 import socket
-import sys
 import time
 import asyncio
 import goodwe
 import influxdb
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 def do_every(period: int,f,*args) -> None:
@@ -58,7 +61,7 @@ class Goodwe2Influx:
         Read from inverter and store in database in loop.
         """
         while not self._scanconnect():
-            print(f"No IP address known. Retry in {self._interval}s.", file=sys.stderr)
+            logger.error(f"Cannot connect to inverter. Retrying.")
             time.sleep(5)
         do_every(self._interval, self._run)
 
@@ -72,11 +75,9 @@ class Goodwe2Influx:
             point = self._format_influxpoint(inverterdata)
             self._write_influx(point)
         except goodwe.RequestFailedException as e:
-            if self._verbose:
-                print(f"RequestFailedException: {self._inverterhostaddress}: {e}", file=sys.stdout)
+            logger.debug(f"RequestFailedException: {self._inverterhostaddress}: {e}")
         except goodwe.InverterError as e:
-            if self._verbose:
-                print(f"InverterError: {self._inverterhostaddress}: {e}", file=sys.stdout)
+            logger.debug(f"InverterError: {self._inverterhostaddress}: {e}")
 
     def _get_inverter_data(self) -> dict:
         """
@@ -106,11 +107,12 @@ class Goodwe2Influx:
 
         try:
             if (not self._inverter or reconnect) and self._inverterhostaddress:
+                logger.info(f'(Re)connect to inverter at {self._inverterhostaddress}')
                 self._inverter = asyncio.run(connect_async(self._inverterhostaddress))
                 self._update_inverter_last_reacheable()
+                logger.info(f'(Connected to inverter at {self._inverterhostaddress}')
         except goodwe.InverterError as e:
-            pass
-
+            logger.error(f"InverterError: {self._inverterhostaddress}: {e}")
 
     def _scanconnect(self) -> bool:
         """
@@ -123,19 +125,19 @@ class Goodwe2Influx:
         if datetime.datetime.now() - self._inverterlastreachable < datetime.timedelta(minutes = 15):
             return self._inverter is not None  # only scan when not reachable for more than 15 minutes
 
-        if self._verbose:
-            print(f"Scanning for inverters.", file=sys.stdout)
+        logger.debug(f"Scanning for inverters.")
         inverters = Goodwe2Influx.scan()
         for inverter in inverters:
             if not inverter['mac'] == self._invertermacaddress:
                 continue
             ipchange = not self._inverterhostaddress == inverter['ip']
             if ipchange:
-                print(f"Update inverter IP to {inverter['ip']}", file=sys.stdout)
+                logger.info(f"Update inverter IP to {inverter['ip']}")
             self._inverterhostaddress = inverter['ip']
             self._update_inverter_last_reacheable()
             self._connect(reconnect = ipchange)
             return self._inverter is not None
+        logger.debug(f"Inverter with macaddress {self._invertermacaddress} not found")
         return self._inverter is not None
 
 
@@ -170,8 +172,7 @@ class Goodwe2Influx:
                                                      self._influxusername, self._influxpassword,
                                                      self._influxdatabase)
             influxdbclient.write_points([point])
-        if self._verbose:
-            print(f"InfluxDB point: {point}", file=sys.stdout)
+        logger.debug(f"InfluxDB point: {point}")
 
 
     @staticmethod
@@ -195,6 +196,8 @@ class Goodwe2Influx:
                 data, _ = sock.recvfrom(1024)
                 fields = data.decode("utf-8").split(",")
                 inverters.append({attribute: fields[i] for i, attribute in enumerate(attributes)})
+                logger.debug(f"Inverter found. IP-address: {inverters[-1]['ip']}   "
+                             f"MAC-address: {inverters[-1]['mac']}   name: {inverters[-1]['name']}")
             except TimeoutError:
                 break
         sock.close()
@@ -217,11 +220,11 @@ def print_inverters(inverters: list[dict]) -> None:
     Print inverters information.
     """
     if not inverters:
-        print(f'No inverters found.')
+        logger.info(f'No inverters found.')
         return
     for i, inverter in enumerate(inverters):
-        print(f"Inverter #{i}   IP-address: {inverter['ip']}   "
-              f"MAC-address: {inverter['mac']}   name: {inverter['name']}")
+        logger.info(f"Inverter #{i}   IP-address: {inverter['ip']}   "
+                    f"MAC-address: {inverter['mac']}   name: {inverter['name']}")
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -263,16 +266,18 @@ def parse_arguments() -> argparse.Namespace:
 
 def main():
     args = parse_arguments()
+    logging.basicConfig(format='%(asctime)s %(message)s', level=logging.INFO)
+    if args.verbose:
+        logger.setLevel(logging.DEBUG)
+
     mappings = load_mappings(args.mappingfile)
 
-    if args.verbose or (not args.invertermac and not args.inverterhost):
-        print_inverters(Goodwe2Influx.scan())
+    print_inverters(Goodwe2Influx.scan())
     if not args.invertermac and not args.inverterhost:
         exit(0)
 
-    if args.verbose:
-        configjsonstr = json.dumps(vars(args)|{'mappings': mappings}, indent=4)
-        print(f'\nConfiguration from commandline and mapping file: {configjsonstr}')
+    configjsonstr = json.dumps(vars(args)|{'mappings': mappings}, indent=4)
+    logger.debug(f'\nConfiguration from commandline and mapping file: {configjsonstr}')
 
     gi = Goodwe2Influx(args.inverterhost, args.invertermac, args.interval, args.influxhost, args.influxport,
                        args.influxusername, args.influxpassword, args.influxdatabase,
